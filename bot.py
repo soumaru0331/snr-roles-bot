@@ -47,5 +47,110 @@ def search_roles(roles: list, keyword: str) -> list:
     return results
 
 
+WIKI_BASE_URL = "https://wiki.supernewroles.com"
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; SNR-Bot/1.0)"}
+
+FACTION_MAP = {
+    "Impostor": "インポスター",
+    "Crewmate": "クルーメイト",
+    "Neutral": "ニュートラル",
+    "Ghost": "幽霊",
+    "Modifier": "モディファイア",
+}
+
+
+def parse_role_list(html: str) -> list:
+    """役職一覧ページのHTMLから役職リストを抽出する"""
+    soup = BeautifulSoup(html, "html.parser")
+    roles = []
+    seen = set()
+
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        name = a.get_text(strip=True)
+
+        if not href.endswith(".md") or not name:
+            continue
+
+        parts = href[:-3].split("/")  # .md を除去してスラッシュで分割
+        if len(parts) < 2:
+            continue
+
+        faction_prefix = parts[0]
+        clean_path = href[:-3]  # .md を除去
+        wiki_url = WIKI_BASE_URL + "/ja/Roles/" + clean_path
+
+        if wiki_url in seen:
+            continue
+        seen.add(wiki_url)
+
+        roles.append({
+            "name": name,
+            "name_en": "",
+            "faction": FACTION_MAP.get(faction_prefix, "その他"),
+            "category": faction_prefix,
+            "description": "",
+            "icon_url": "",
+            "wiki_url": wiki_url,
+        })
+
+    return roles
+
+
+def parse_role_detail(html: str) -> tuple:
+    """役職個別ページのHTMLから説明文とアイコンURLを抽出する"""
+    soup = BeautifulSoup(html, "html.parser")
+
+    icon_url = ""
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        if src and src.startswith("http") and "icon" in src.lower():
+            icon_url = src
+            break
+
+    container = soup.find("div", class_="container")
+    description = ""
+
+    if container:
+        full_text = container.get_text(separator="\n", strip=True)
+        if "役職説明" in full_text:
+            after_desc = full_text.split("役職説明", 1)[1]
+            if "ゲーム設定" in after_desc:
+                description = after_desc.split("ゲーム設定", 1)[0].strip()
+            else:
+                description = after_desc[:800].strip()
+        else:
+            description = full_text[:800]
+
+    return description[:1000], icon_url
+
+
+def fetch_roles() -> list:
+    """WikiからすべてのSNR役職を取得してリストで返す"""
+    logger.info("Wikiから役職データを取得中...")
+    try:
+        resp = requests.get(WIKI_LIST_URL, headers=HEADERS, timeout=30)
+        resp.encoding = "utf-8"
+        resp.raise_for_status()
+        roles = parse_role_list(resp.text)
+    except Exception as e:
+        logger.error(f"役職一覧ページの取得失敗: {e}")
+        return []
+
+    for role in roles:
+        try:
+            r = requests.get(role["wiki_url"], headers=HEADERS, timeout=15)
+            r.encoding = "utf-8"
+            r.raise_for_status()
+            description, icon_url = parse_role_detail(r.text)
+            role["description"] = description
+            role["icon_url"] = icon_url
+        except Exception as e:
+            logger.warning(f"{role['name']} の詳細取得失敗: {e}")
+
+    logger.info(f"取得完了: {len(roles)}役職")
+    return roles
+
+
 if __name__ == "__main__":
     pass
