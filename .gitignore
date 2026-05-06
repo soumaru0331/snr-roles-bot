@@ -1,0 +1,6 @@
+roles_cache.json
+discord token.txt
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
