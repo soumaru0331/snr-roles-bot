@@ -4,3 +4,8 @@ discord token.txt
 __pycache__/
 *.pyc
 .pytest_cache/
+debug_*.txt
+search_*.txt
+wiki_*.txt
+dim_debug.txt
+kanji_roles.txt

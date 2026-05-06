@@ -1,10 +1,12 @@
 import os
+import re
 import json
 import threading
 import logging
 from datetime import datetime
 
 import jaconv
+import pykakasi
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -26,28 +28,75 @@ FACTION_COLORS = {
 }
 
 
+_LOANWORD_MAP = [
+    # jaconvが標準ローマ字で変換してしまう英語由来の音を先に変換
+    ("di", "でぃ"), ("ti", "てぃ"), ("du", "どぅ"), ("tu", "とぅ"),
+    ("fa", "ふぁ"), ("fi", "ふぃ"), ("fe", "ふぇ"), ("fo", "ふぉ"),
+    ("va", "ゔぁ"), ("vi", "ゔぃ"), ("vu", "ゔ"),  ("ve", "ゔぇ"), ("vo", "ゔぉ"),
+    ("wi", "うぃ"), ("we", "うぇ"), ("wo", "うぉ"),
+]
+
+_kakasi = pykakasi.kakasi()
+
+
+def _kanji_to_hira(text: str) -> str:
+    """漢字を含むテキストをひらがなに変換する（ASCII・カナはそのまま保持）"""
+    result = _kakasi.convert(text)
+    return ''.join(item.get('hira') or item.get('orig', '') for item in result)
+
+
 def normalize_text(text: str) -> str:
-    """任意の文字列をカタカナに正規化する（ローマ字・ひらがな対応）"""
+    """任意の文字列をカタカナに正規化する（漢字・ローマ字・ひらがな対応）"""
+    text = _kanji_to_hira(text)          # 漢字 → ひらがな（ASCII・カナは保持）
     text = text.lower()
-    text = jaconv.alphabet2kana(text)   # ローマ字 → ひらがな
+    # 母音後の 'ny' → 'んy'（例: inyo→いんよ、kinyou→きんよう）
+    text = re.sub(r'(?<=[aiueo])ny', 'んy', text)
+    for rom, kana in _LOANWORD_MAP:
+        text = text.replace(rom, kana)
+    text = jaconv.alphabet2kana(text)   # 残りのローマ字 → ひらがな
     text = jaconv.hira2kata(text)       # ひらがな → カタカナ
     return text
 
 
+_SMALL_TO_LARGE = str.maketrans("ァィゥェォャュョヮ", "アイウエオヤユヨワ")
+
+
 def _strip_noise(text: str) -> str:
-    """ローマ字変換ノイズ（ッ・ー）を除去して曖昧マッチを可能にする"""
-    return text.replace("ッ", "").replace("ー", "")
+    """ローマ字変換ノイズ（ッ・ー・小書きカナ）を除去して曖昧マッチを可能にする"""
+    text = text.replace("ッ", "").replace("ー", "")
+    text = text.translate(_SMALL_TO_LARGE)  # シェ→シエ、ウォ→ウオ 等
+    return text
+
+
+_TRAILING_CONSONANTS_RE = re.compile(r'[bcdfghjklmnpqrstvwxyz]+$')
+
+
+def _normalize_partial(keyword: str) -> str:
+    """末尾の子音クラスタを除去してから正規化（'dim'→'di'→'ディ' 等の部分入力対応）"""
+    text = _kanji_to_hira(keyword)
+    text = text.lower()
+    text = re.sub(r'(?<=[aiueo])ny', 'んy', text)
+    for rom, kana in _LOANWORD_MAP:
+        text = text.replace(rom, kana)
+    text = _TRAILING_CONSONANTS_RE.sub('', text)
+    if not text:
+        return ''
+    text = jaconv.alphabet2kana(text)
+    text = jaconv.hira2kata(text)
+    return text
 
 
 def search_roles(roles: list, keyword: str) -> list:
     """カタカナ・ひらがな・ローマ字の部分一致で役職を検索する"""
     kw_kata = normalize_text(keyword)
     kw_clean = _strip_noise(kw_kata)
+    kw_partial = _strip_noise(_normalize_partial(keyword))
     results = []
     for role in roles:
         name_kata = normalize_text(role["name"])
         name_clean = _strip_noise(name_kata)
-        if kw_clean and kw_clean in name_clean:
+        if (kw_clean and kw_clean in name_clean) or \
+                (kw_partial and kw_partial != kw_clean and kw_partial in name_clean):
             results.append(role)
     return results
 

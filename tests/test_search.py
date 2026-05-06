@@ -9,6 +9,11 @@ SAMPLE_ROLES = [
     {"name": "イビルゲッサー", "name_en": "EvilGuesser", "faction": "インポスター", "category": "キラー", "description": "", "icon_url": "", "wiki_url": ""},
     {"name": "シェリフ", "name_en": "Sheriff", "faction": "クルーメイト", "category": "キラー", "description": "", "icon_url": "", "wiki_url": ""},
     {"name": "アーソニスト", "name_en": "Arsonist", "faction": "ニュートラル", "category": "キラー", "description": "", "icon_url": "", "wiki_url": ""},
+    {"name": "ディメンションウォーカー", "name_en": "DimensionWalker", "faction": "ニュートラル", "category": "その他", "description": "", "icon_url": "", "wiki_url": ""},
+    {"name": "波動砲", "faction": "インポスター", "description": "", "icon_url": "", "wiki_url": ""},
+    {"name": "天秤", "faction": "ニュートラル", "description": "", "icon_url": "", "wiki_url": ""},
+    {"name": "陰陽師", "faction": "ニュートラル", "description": "", "icon_url": "", "wiki_url": ""},
+    {"name": "侍", "faction": "クルーメイト", "description": "", "icon_url": "", "wiki_url": ""},
 ]
 
 def test_katakana_partial():
@@ -57,3 +62,30 @@ def test_multiple_match():
     results = search_roles(SAMPLE_ROLES, "she")
     names = [r["name"] for r in results]
     assert "シェリフ" in names
+
+def test_romaji_mid_consonant():
+    # "dim" → 末尾子音'm'を除去 → "di" → "ディ" → ディメンションウォーカーにヒット
+    results = search_roles(SAMPLE_ROLES, "dim")
+    assert len(results) == 1
+    assert results[0]["name"] == "ディメンションウォーカー"
+
+def test_romaji_dimen():
+    results = search_roles(SAMPLE_ROLES, "dimen")
+    assert len(results) == 1
+    assert results[0]["name"] == "ディメンションウォーカー"
+
+def test_kanji_hadou():
+    results = search_roles(SAMPLE_ROLES, "hadou")
+    assert any(r["name"] == "波動砲" for r in results)
+
+def test_kanji_ten():
+    results = search_roles(SAMPLE_ROLES, "ten")
+    assert any(r["name"] == "天秤" for r in results)
+
+def test_kanji_inyo():
+    results = search_roles(SAMPLE_ROLES, "inyo")
+    assert any(r["name"] == "陰陽師" for r in results)
+
+def test_kanji_samurai():
+    results = search_roles(SAMPLE_ROLES, "samu")
+    assert any(r["name"] == "侍" for r in results)
