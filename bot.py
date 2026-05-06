@@ -187,5 +187,263 @@ def fetch_roles() -> list:
     return roles
 
 
+# --- Flask ヘルスサーバー（UptimeRobot用） ---
+flask_app = Flask(__name__)
+
+
+@flask_app.route("/health")
+def health():
+    return "OK", 200
+
+
+def run_flask() -> None:
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+
+# --- Discord Bot ---
+ROLES_PER_PAGE = 10
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# --- Embed ビルダー ---
+def build_role_embed(role: dict) -> discord.Embed:
+    faction = role.get("faction", "その他")
+    color = FACTION_COLORS.get(faction, discord.Color.greyple())
+
+    embed = discord.Embed(
+        title=f"🎭 {role['name']}",
+        url=role.get("wiki_url") or None,
+        color=color,
+    )
+    embed.add_field(name="陣営", value=faction, inline=True)
+
+    if role.get("description"):
+        desc = role["description"][:1000]
+        embed.add_field(name="役職説明", value=desc, inline=False)
+
+    if role.get("icon_url"):
+        embed.set_thumbnail(url=role["icon_url"])
+
+    if role.get("wiki_url"):
+        embed.set_footer(text="🔗 Wikiで詳細を見る → " + role["wiki_url"])
+
+    return embed
+
+
+# --- UI Views ---
+class RoleDetailView(discord.ui.View):
+    def __init__(self, back_view: discord.ui.View):
+        super().__init__(timeout=600)
+        self.back_view = back_view
+
+    @discord.ui.button(label="◀ 一覧に戻る", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="役職を選んでください:",
+            embed=None,
+            view=self.back_view,
+        )
+
+
+class RoleListView(discord.ui.View):
+    def __init__(self, roles: list, faction: str, page: int = 0):
+        super().__init__(timeout=600)
+        self.roles = roles
+        self.faction = faction
+        self.page = page
+        self.total_pages = max(1, (len(roles) + ROLES_PER_PAGE - 1) // ROLES_PER_PAGE)
+        self._build_buttons()
+
+    def _build_buttons(self):
+        self.clear_items()
+        start = self.page * ROLES_PER_PAGE
+        page_roles = self.roles[start: start + ROLES_PER_PAGE]
+
+        for role in page_roles:
+            btn = discord.ui.Button(
+                label=role["name"][:80],
+                style=discord.ButtonStyle.primary,
+            )
+            btn.callback = self._make_role_callback(role)
+            self.add_item(btn)
+
+        if self.total_pages > 1:
+            prev_btn = discord.ui.Button(
+                label="◀ 前へ",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0),
+            )
+            next_btn = discord.ui.Button(
+                label="次へ ▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.total_pages - 1),
+            )
+            prev_btn.callback = self._prev_page
+            next_btn.callback = self._next_page
+            self.add_item(prev_btn)
+            self.add_item(next_btn)
+
+    def _make_role_callback(self, role: dict):
+        async def callback(interaction: discord.Interaction):
+            embed = build_role_embed(role)
+            await interaction.response.edit_message(
+                content=None,
+                embed=embed,
+                view=RoleDetailView(back_view=self),
+            )
+        return callback
+
+    async def _prev_page(self, interaction: discord.Interaction):
+        self.page -= 1
+        self._build_buttons()
+        await interaction.response.edit_message(
+            content=f"**{self.faction}** の役職一覧（{self.page + 1}/{self.total_pages}ページ）:",
+            view=self,
+        )
+
+    async def _next_page(self, interaction: discord.Interaction):
+        self.page += 1
+        self._build_buttons()
+        await interaction.response.edit_message(
+            content=f"**{self.faction}** の役職一覧（{self.page + 1}/{self.total_pages}ページ）:",
+            view=self,
+        )
+
+
+class FactionView(discord.ui.View):
+    FACTIONS = ["クルーメイト", "インポスター", "ニュートラル", "幽霊", "モディファイア", "その他"]
+
+    def __init__(self):
+        super().__init__(timeout=600)
+        for faction in self.FACTIONS:
+            btn = discord.ui.Button(
+                label=faction,
+                style=discord.ButtonStyle.primary,
+            )
+            btn.callback = self._make_faction_callback(faction)
+            self.add_item(btn)
+
+    def _make_faction_callback(self, faction: str):
+        async def callback(interaction: discord.Interaction):
+            all_roles = load_cache()
+            known = {"クルーメイト", "インポスター", "ニュートラル", "幽霊", "モディファイア"}
+            if faction == "その他":
+                roles = [r for r in all_roles if r.get("faction") not in known]
+            else:
+                roles = [r for r in all_roles if r.get("faction") == faction]
+
+            if not roles:
+                await interaction.response.send_message(
+                    f"**{faction}** の役職データがありません。", ephemeral=True
+                )
+                return
+
+            view = RoleListView(roles, faction)
+            await interaction.response.edit_message(
+                content=f"**{faction}** の役職一覧（1/{view.total_pages}ページ）:",
+                view=view,
+            )
+        return callback
+
+
+class SearchResultView(discord.ui.View):
+    def __init__(self, results: list):
+        super().__init__(timeout=600)
+        for role in results[:25]:
+            btn = discord.ui.Button(
+                label=role["name"][:80],
+                style=discord.ButtonStyle.primary,
+            )
+            btn.callback = self._make_callback(role)
+            self.add_item(btn)
+
+    def _make_callback(self, role: dict):
+        async def callback(interaction: discord.Interaction):
+            embed = build_role_embed(role)
+            await interaction.response.edit_message(
+                content=None, embed=embed, view=None
+            )
+        return callback
+
+
+# --- スラッシュコマンド ---
+@bot.tree.command(name="roles", description="SNRの役職一覧を陣営別に表示します")
+async def roles_command(interaction: discord.Interaction):
+    roles = load_cache()
+    if not roles:
+        await interaction.response.send_message(
+            "役職データを読み込み中です。しばらくしてからもう一度お試しください。",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_message(
+        "陣営を選んでください:", view=FactionView()
+    )
+
+
+@bot.tree.command(name="search", description="役職を名前で検索します（部分一致・ひらがな・ローマ字対応）")
+@app_commands.describe(keyword="検索キーワード（例: イビルゲ、いびるげ、ibiruge）")
+async def search_command(interaction: discord.Interaction, keyword: str):
+    roles = load_cache()
+    if not roles:
+        await interaction.response.send_message(
+            "役職データを読み込み中です。しばらくしてからもう一度お試しください。",
+            ephemeral=True,
+        )
+        return
+
+    results = search_roles(roles, keyword)
+
+    if not results:
+        await interaction.response.send_message(
+            f"**「{keyword}」** に一致する役職は見つかりませんでした。\n"
+            "カタカナ・ひらがな・ローマ字で試してみてください。"
+        )
+        return
+
+    if len(results) == 1:
+        embed = build_role_embed(results[0])
+        await interaction.response.send_message(embed=embed)
+        return
+
+    await interaction.response.send_message(
+        f"**「{keyword}」** の検索結果: {len(results)} 件（最大25件表示）\n役職を選んでください:",
+        view=SearchResultView(results),
+    )
+
+
+# --- on_ready ---
+async def refresh_cache() -> None:
+    roles = fetch_roles()
+    if roles:
+        save_cache(roles)
+        logger.info("キャッシュ自動更新完了")
+    else:
+        logger.warning("キャッシュ更新失敗: 既存キャッシュを維持")
+
+
+@bot.event
+async def on_ready():
+    logger.info(f"Botログイン: {bot.user}")
+
+    if not load_cache():
+        logger.info("キャッシュなし: スクレイピング実行中...")
+        roles = fetch_roles()
+        if roles:
+            save_cache(roles)
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(refresh_cache, "cron", hour=0, minute=0)
+    scheduler.start()
+
+    await bot.tree.sync()
+    logger.info("スラッシュコマンド同期完了")
+
+    threading.Thread(target=run_flask, daemon=True).start()
+    logger.info("Flaskヘルスサーバー起動")
+
+
 if __name__ == "__main__":
-    pass
+    bot.run(load_token())
