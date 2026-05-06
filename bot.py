@@ -34,15 +34,20 @@ def normalize_text(text: str) -> str:
     return text
 
 
+def _strip_noise(text: str) -> str:
+    """ローマ字変換ノイズ（ッ・ー）を除去して曖昧マッチを可能にする"""
+    return text.replace("ッ", "").replace("ー", "")
+
+
 def search_roles(roles: list, keyword: str) -> list:
-    """カタカナ・ひらがな・ローマ字・英語名の部分一致で役職を検索する"""
+    """カタカナ・ひらがな・ローマ字の部分一致で役職を検索する"""
     kw_kata = normalize_text(keyword)
-    kw_lower = keyword.lower()
+    kw_clean = _strip_noise(kw_kata)
     results = []
     for role in roles:
         name_kata = normalize_text(role["name"])
-        name_en_lower = role.get("name_en", "").lower()
-        if kw_kata in name_kata or kw_lower in name_en_lower:
+        name_clean = _strip_noise(name_kata)
+        if kw_clean and kw_clean in name_clean:
             results.append(role)
     return results
 
@@ -379,7 +384,7 @@ async def roles_command(interaction: discord.Interaction):
         )
         return
     await interaction.response.send_message(
-        "陣営を選んでください:", view=FactionView()
+        "陣営を選んでください:", view=FactionView(), ephemeral=True
     )
 
 
@@ -399,18 +404,20 @@ async def search_command(interaction: discord.Interaction, keyword: str):
     if not results:
         await interaction.response.send_message(
             f"**「{keyword}」** に一致する役職は見つかりませんでした。\n"
-            "カタカナ・ひらがな・ローマ字で試してみてください。"
+            "カタカナ・ひらがな・ローマ字で試してみてください。",
+            ephemeral=True,
         )
         return
 
     if len(results) == 1:
         embed = build_role_embed(results[0])
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
     await interaction.response.send_message(
         f"**「{keyword}」** の検索結果: {len(results)} 件（最大25件表示）\n役職を選んでください:",
         view=SearchResultView(results),
+        ephemeral=True,
     )
 
 

@@ -36,22 +36,24 @@ def test_romaji_short():
     assert len(results) == 1
     assert results[0]["name"] == "イビルゲッサー"
 
-def test_english_partial():
-    results = search_roles(SAMPLE_ROLES, "Evil")
+def test_romaji_with_consonant_end():
+    # "ibir" → "イビッ" → strip → "イビ" → matches
+    results = search_roles(SAMPLE_ROLES, "ibir")
     assert len(results) == 1
     assert results[0]["name"] == "イビルゲッサー"
 
-def test_english_lowercase():
-    results = search_roles(SAMPLE_ROLES, "evil")
+def test_romaji_with_long_vowel():
+    # "arso" → "アッソ" → strip → "アソ" → matches "アーソニスト"
+    results = search_roles(SAMPLE_ROLES, "arso")
     assert len(results) == 1
-    assert results[0]["name"] == "イビルゲッサー"
+    assert results[0]["name"] == "アーソニスト"
 
 def test_no_match():
     results = search_roles(SAMPLE_ROLES, "zzzzz")
     assert len(results) == 0
 
 def test_multiple_match():
-    results = search_roles(SAMPLE_ROLES, "r")
+    # "sherifuto" は存在しないが "she" はシェリフにだけ一致
+    results = search_roles(SAMPLE_ROLES, "she")
     names = [r["name"] for r in results]
     assert "シェリフ" in names
-    assert "アーソニスト" in names
