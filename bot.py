@@ -47,6 +47,41 @@ def search_roles(roles: list, keyword: str) -> list:
     return results
 
 
+def load_token() -> str:
+    """環境変数 → discord token.txt の順でトークンを読み込む"""
+    token = os.environ.get("DISCORD_TOKEN")
+    if token:
+        return token
+    try:
+        with open("discord token.txt", "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        raise RuntimeError("DISCORD_TOKEN 環境変数か 'discord token.txt' が必要です")
+
+
+def load_cache() -> list:
+    """roles_cache.json からキャッシュを読み込む。ファイルなしは空リストを返す"""
+    if not os.path.exists(CACHE_FILE):
+        return []
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("roles", [])
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
+def save_cache(roles: list) -> None:
+    """役職リストを roles_cache.json に保存する"""
+    data = {
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "roles": roles,
+    }
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    logger.info(f"キャッシュ保存完了: {len(roles)}役職")
+
+
 WIKI_BASE_URL = "https://wiki.supernewroles.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; SNR-Bot/1.0)"}
 
