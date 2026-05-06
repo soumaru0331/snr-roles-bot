@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import re
 import json
@@ -139,6 +141,18 @@ def save_cache(roles: list) -> None:
 WIKI_BASE_URL = "https://wiki.supernewroles.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; SNR-Bot/1.0)"}
 
+GITHUB_CSV_URL = "https://raw.githubusercontent.com/SuperNewRoles/SuperNewRoles/master/SuperNewRoles/Resources/TranslationData.csv"
+GITHUB_TREE_URL = "https://api.github.com/repos/SuperNewRoles/SuperNewRoles/git/trees/master?recursive=1"
+
+GITHUB_FOLDER_FACTION_MAP = {
+    "Impostor": "インポスター",
+    "CrewMate": "クルーメイト",
+    "Madmates": "クルーメイト",
+    "Neutral": "ニュートラル",
+    "Ghost": "幽霊",
+    "Modifiers": "モディファイア",
+}
+
 FACTION_MAP = {
     "Impostor": "インポスター",
     "Crewmate": "クルーメイト",
@@ -214,8 +228,91 @@ def parse_role_detail(html: str) -> tuple:
     return description[:1000], icon_url
 
 
+def _fetch_translation_map() -> dict:
+    """TranslationData.csvからKey→(日本語名, 英語名)のマッピングを返す"""
+    resp = requests.get(GITHUB_CSV_URL, headers=HEADERS, timeout=15)
+    resp.encoding = "utf-8"
+    result = {}
+    reader = csv.reader(io.StringIO(resp.text))
+    for row in reader:
+        if not row or row[0].startswith('#') or '.' in row[0]:
+            continue
+        key = row[0].strip()
+        jp = row[1].strip() if len(row) > 1 else ""
+        en = row[2].strip() if len(row) > 2 else ""
+        if key and jp:
+            result[key] = (jp, en)
+    return result
+
+
+def fetch_github_extra_roles(wiki_names: set) -> list:
+    """WikiにないロールをGitHubのフォルダ構造+翻訳CSVで補完する"""
+    try:
+        trans = _fetch_translation_map()
+    except Exception as e:
+        logger.error(f"翻訳データ取得失敗: {e}")
+        return []
+
+    try:
+        tree_resp = requests.get(
+            GITHUB_TREE_URL,
+            headers={**HEADERS, "Accept": "application/vnd.github.v3+json"},
+            timeout=30,
+        )
+        tree_data = tree_resp.json()
+        role_paths = [
+            item["path"] for item in tree_data.get("tree", [])
+            if item["path"].startswith("SuperNewRoles/Roles/")
+            and item["path"].endswith(".cs")
+            and item.get("type") == "blob"
+        ]
+    except Exception as e:
+        logger.error(f"GitHubツリー取得失敗: {e}")
+        return []
+
+    extra = []
+    seen = set()
+
+    for path in role_paths:
+        rel = path[len("SuperNewRoles/Roles/"):-len(".cs")]
+        parts = rel.split("/")
+        if len(parts) < 2:
+            continue
+        folder = parts[0]
+        role_id = parts[-1]
+
+        if role_id in seen:
+            continue
+        seen.add(role_id)
+
+        faction = GITHUB_FOLDER_FACTION_MAP.get(folder)
+        if not faction:
+            continue
+
+        translation = trans.get(role_id)
+        if not translation:
+            continue
+
+        jp_name, en_name = translation
+        if jp_name in wiki_names:
+            continue
+
+        extra.append({
+            "name": jp_name,
+            "name_en": en_name,
+            "faction": faction,
+            "category": folder,
+            "description": "",
+            "icon_url": "",
+            "wiki_url": "",
+        })
+
+    logger.info(f"GitHub補完: {len(extra)}役職追加")
+    return extra
+
+
 def fetch_roles() -> list:
-    """WikiからすべてのSNR役職を取得してリストで返す"""
+    """WikiからすべてのSNR役職を取得し、WikiにないものをGitHubで補完する"""
     logger.info("Wikiから役職データを取得中...")
     try:
         resp = requests.get(WIKI_LIST_URL, headers=HEADERS, timeout=30)
@@ -236,6 +333,10 @@ def fetch_roles() -> list:
             role["icon_url"] = icon_url
         except Exception as e:
             logger.warning(f"{role['name']} の詳細取得失敗: {e}")
+
+    wiki_names = {r["name"] for r in roles}
+    extra = fetch_github_extra_roles(wiki_names)
+    roles.extend(extra)
 
     logger.info(f"取得完了: {len(roles)}役職")
     return roles
