@@ -20,6 +20,9 @@ from discord.ext import commands
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 初期化フラグ（on_readyの二重実行防止）
+_initialized = False
+
 CACHE_FILE = "roles_cache.json"
 WIKI_LIST_URL = "https://wiki.supernewroles.com/ja/Roles/役職一覧"
 
@@ -583,13 +586,19 @@ async def refresh_cache() -> None:
 
 @bot.event
 async def on_ready():
+    global _initialized
     logger.info(f"Botログイン: {bot.user}")
 
+    # 再接続時の二重初期化を防ぐ
+    if _initialized:
+        logger.info("再接続検出: 初期化スキップ")
+        return
+    _initialized = True
+
+    # キャッシュがなければバックグラウンドで非同期取得
     if not load_cache():
-        logger.info("キャッシュなし: スクレイピング実行中...")
-        roles = fetch_roles()
-        if roles:
-            save_cache(roles)
+        logger.info("キャッシュなし: バックグラウンドでスクレイピング開始...")
+        bot.loop.create_task(refresh_cache())
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(refresh_cache, "cron", hour=0, minute=0)
@@ -598,9 +607,34 @@ async def on_ready():
     await bot.tree.sync()
     logger.info("スラッシュコマンド同期完了")
 
-    threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("Flaskヘルスサーバー起動")
+
+@bot.event
+async def on_disconnect():
+    logger.warning("Discord接続が切断されました。自動再接続を待機中...")
+
+
+@bot.event
+async def on_resumed():
+    logger.info("Discord接続が再開されました。")
 
 
 if __name__ == "__main__":
-    bot.run(load_token())
+    import time
+
+    # Flaskをメインスレッドで先に起動（ヘルスチェックをBot起動前から有効化）
+    threading.Thread(target=run_flask, daemon=True).start()
+    logger.info("Flaskヘルスサーバー起動")
+
+    # 自動再起動ループ（クラッシュしても復帰）
+    backoff = 5
+    while True:
+        try:
+            _initialized = False
+            bot.run(load_token(), reconnect=True)
+        except Exception as e:
+            logger.error(f"Bot異常終了: {e}. {backoff}秒後に再起動...")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)  # 最大2分まで延長
+        else:
+            logger.info("Bot正常終了")
+            break
